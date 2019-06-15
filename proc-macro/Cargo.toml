@@ -1,0 +1,29 @@
+[package]
+name = "easy-pin-proc-macro"
+version = "0.0.1-alpha"
+authors = ["Daniel Henry-Mantilla <daniel.henry.mantilla@gmail.com>"]
+edition = "2018"
+
+description = "Using Pin made easy."
+keywords = ["Pin", "pin_utils", "proc_macro", "human", "easy"]
+
+documentation = "https://docs.rs/easy-pin"
+homepage = "https://crates.io/easy-pin"
+repository = "https://github.com/danielhenrymantilla/easy-pin-rs"
+
+license-file = "LICENSE"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "0.4.30"
+quote = "0.6.12"
+syn = { version = "0.15.34", features = ["derive"] }
+
+[features]
+default = []
+
+# mainly for debug
+extra-traits = ["syn/extra-traits"]
