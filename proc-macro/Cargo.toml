@@ -8,7 +8,7 @@ description = "Using Pin made easy."
 keywords = ["Pin", "pin_utils", "proc_macro", "human", "easy"]
 
 documentation = "https://docs.rs/easy-pin"
-homepage = "https://crates.io/easy-pin"
+homepage = "https://crates.io/crates/easy-pin"
 repository = "https://github.com/danielhenrymantilla/easy-pin-rs"
 
 license-file = "LICENSE"
