@@ -11,7 +11,15 @@ use ::std::{*,
 mod lib {
     use super::*;
 
-    #[easy_pin]
+    #[easy_pin(
+        // Cannot derive Unpin when a #[transitively_pinned] is
+        // unconditionnally `!Unpin`.
+        //
+        // # Safety:
+        //
+        //   - There is no `Unpin` implementation within the crate.
+        Unpin = "unsafe_no_impl",
+    )]
     pub
     struct SelfReferential {
         #[transitively_pinned]
@@ -29,22 +37,22 @@ mod lib {
                 string: PinSensitive::new(string.into()),
                 at_string: NonNull::dangling(),
             });
-            let string_address: NonNull<String> =
+            let at_string: NonNull<String> =
                 pinned_box.as_ref()
                     .pinned_string()
                     .pinned_address()
             ;
-            *pinned_box.as_mut().unpinned_at_string_mut() = string_address;
+            *pinned_box.as_mut().unpinned_at_string_mut() = at_string;
             pinned_box
         }
 
         #[inline]
         pub
-        fn at_string<'__> (self: Pin<&'__ Self>) -> &'__ String
+        fn at_string<'_1> (self: Pin<&'_1 Self>) -> &'_1 String
         {
             unsafe {
                 // Safety: the only way to get a Pin<&Self> is through
-                // Self::new().as_ref(), ensuring the pointer is well-formed.
+                // Self::new().as_ref(), which ensures the pointer is well-formed.
                 self.get_ref().at_string.as_ref()
             }
         }

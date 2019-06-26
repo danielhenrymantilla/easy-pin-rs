@@ -1,5 +1,8 @@
+#![feature(dropck_eyepatch)]
+
 use ::easy_pin::{
     easy_pin,
+    PinSensitive,
 };
 
 use ::pin_utils::pin_mut;
@@ -12,86 +15,170 @@ use ::std::{*,
 mod lib {
     use super::*;
 
-    #[easy_pin(Unpin, Drop)]
+    type Link<'node, T> = PinSensitive<
+        Cell<
+            Option<
+                Pin<&'node Node<'node, T>>
+            >
+        >
+    >;
+
+    #[easy_pin(
+        Drop = "unsafe_no_impl",
+    )]
     pub
-    struct Node<T> {
+    struct Node<'node, T : 'node> {
         #[unpinned]
         pub
         value: T,
 
-        #[unpinned]
-        prev: Cell<*const Node<T>>,
+        #[transitively_pinned]
+        prev: Link<'node, T>,
 
-        #[unpinned]
-        next: Cell<*const Node<T>>,
+        #[transitively_pinned]
+        next: Link<'node, T>,
     }
 
-    impl<T> easy_pin::PinDrop for Node<T> {
+    /// `Drop` that would have been generated except for the *dangling* 'node
+    ///
+    /// # Safety:
+    ///
+    ///   - right before 'node dangles, the destructor of the pointee clears
+    ///     our pointer, setting it to None.
+    unsafe
+    impl<#[may_dangle] 'node, T : 'node> Drop
+        for Node<'node, T>
+    {
+        fn drop (self: &mut Self)
+        {
+            unsafe {
+                ::easy_pin::PinDrop::drop_pinned(
+                    Pin::new_unchecked(self)
+                )
+            }
+        }
+    }
+
+    impl<T> easy_pin::PinDrop for Node<'_, T>
+    {
         #[inline]
         unsafe
         fn drop_pinned (
             self: Pin<&mut Self>,
         )
         {
-            self.prev.get().as_ref().map(|p| p.next.set(ptr::null()));
-            self.next.get().as_ref().map(|n| n.prev.set(ptr::null()));
+            /// Implementation does not require `unsafe`
+            fn drop_pinned<T> (this: Pin<&mut Node<'_, T>>) {
+                eprintln!("Dropping {:#x?}", &*this as *const _);
+                if let Some(p) = this.prev.get() { p.next.set(None); }
+                if let Some(n) = this.next.get() { n.prev.set(None); }
+            }
+
+            drop_pinned(self)
         }
     }
 
-    impl<T> Node<T> {
+    impl<T : fmt::Debug> fmt::Debug for Node<'_, T>
+    {
+        fn fmt (
+            self: &'_ Self,
+            stream: &'_ mut fmt::Formatter<'_>,
+        ) -> fmt::Result
+        {
+            stream
+                .debug_struct("Node")
+                .field("value", &self.value)
+                .field("prev", &self.prev.get().map(|p| p.get_ref() as *const _))
+                .field("next", &self.next.get().map(|p| p.get_ref() as *const _))
+                .finish()
+        }
+    }
+
+    impl<'node, T : 'node> Node<'node, T>
+    {
         #[inline]
         pub
         fn new (value: T) -> Self
         {
             Self {
                 value,
-                prev: Cell::new(ptr::null()),
-                next: Cell::new(ptr::null()),
+                prev: PinSensitive::new(Cell::new(None)),
+                next: PinSensitive::new(Cell::new(None)),
             }
         }
 
         pub
-        fn append<'prev, 'next> (
-            self: Pin<&'prev Self>,
-            next: Pin<&'next Self>,
+        fn set_next (
+            self: Pin<&'node Self>,
+            next: Pin<&'node Self>,
         )
         {
-            assert!(self.next.get().is_null());
-            self.next.set(&*next);
-            assert!(next.prev.get().is_null());
-            next.prev.set(&*self);
+            if let Some(n) = self.next.get() { n.prev.set(None); }
+            self.next.set(Some(next));
+            if let Some(p) = next.prev.get() { p.next.set(None); }
+            next.prev.set(Some(self));
         }
 
         #[inline]
         pub
-        fn prepend<'next, 'prev> (
-            self: Pin<&'next Self>,
-            prev: Pin<&'prev Self>,
+        fn set_prev (
+            self: Pin<&'node Self>,
+            prev: Pin<&'node Self>,
         )
         {
-            prev.append(self);
+            prev.set_next(self);
         }
 
         #[inline]
         pub
-        fn next<'__> (
-            self: &'__ Self,
-        ) -> Option<&'__ Self>
+        fn remove (
+            self: &'_ Self,
+        )
         {
-            unsafe {
-                self.next.get().as_ref()
-            }
+            if let Some(p) = self.prev.get() { p.next.set(None); }
+            if let Some(n) = self.next.get() { n.prev.set(None); }
+            self.prev.set(None);
+            self.next.set(None);
         }
 
         #[inline]
         pub
-        fn prev<'__> (
-            self: &'__ Self,
-        ) -> Option<&'__ Self>
+        fn next (
+            self: &'node Self,
+        ) -> Option<&'node Self>
         {
-            unsafe {
-                self.prev.get().as_ref()
-            }
+            self.next.get().map(Pin::get_ref)
+        }
+
+        #[inline]
+        pub
+        fn prev (
+            self: &'node Self,
+        ) -> Option<&'node Self>
+        {
+            self.prev.get().map(Pin::get_ref)
+        }
+
+        pub
+        fn iter_forwards (
+            self: &'node Self,
+        ) -> impl Iterator<Item = &'node Node<'node, T>>
+        {
+            iter::successors(
+                Some(self),
+                |current| current.next(),
+            )
+        }
+
+        pub
+        fn iter_backwards (
+            self: &'node Self,
+        ) -> impl Iterator<Item = &'node Node<'node, T>>
+        {
+            iter::successors(
+                Some(self),
+                |current| current.prev(),
+            )
         }
     }
 }
@@ -99,43 +186,39 @@ use self::lib::*;
 
 fn main ()
 {
-    let x = Node::new(42);
-    let y = Node::new(27);
-    pin_mut!(x, y);
-    {
-        let z = Node::new(0);
-        pin_mut!(z);
-        // x -> z
-        x.as_ref().append(z.as_ref());
-        // y <- z
-        y.as_ref().prepend(z.as_ref());
-        let mut cursor = x.as_ref().get_ref();
-        loop {
-            println!("cursor -> {}", cursor.value);
-            if let Some(next) = cursor.next() {
-                cursor = next;
-            } else {
-                break;
-            }
-        }
-        println!("And back...");
-        loop {
-            println!("cursor -> {}", cursor.value);
-            if let Some(prev) = cursor.prev() {
-                cursor = prev;
-            } else {
-                break;
-            }
-        }
-    }
-    println!("Dropped 0.");
-    let mut cursor = x.as_ref().get_ref();
-    loop {
-        println!("cursor -> {}", cursor.value);
-        if let Some(next) = cursor.next() {
-            cursor = next;
-        } else {
-            break;
-        }
-    }
+    let x = Node::new(42); // |x|
+    let y = Node::new(27); // |y|
+    let z = Node::new(0);  // |z|
+    pin_mut!(x, y, z);
+    let x = x.as_ref();
+    let y = y.as_ref();
+    let z = z.as_ref();
+    x.set_next(y); // |x -> y|
+    z.set_prev(y); // |z <- y <- x|
+    // |x -> y -> z|
+    dbg!(x  .iter_forwards()
+            .map(|n| (n as *const _, n))
+            .collect::<Vec<_>>()
+    );
+    // |z <- y <- x|
+    dbg!(z  .iter_backwards()
+            .map(|n| (n as *const _, n))
+            .collect::<Vec<_>>()
+    );
+
+    y.remove(); // |x|, |y|, |z|
+    z.set_next(x); // |z -> x|
+
+    dbg!(z  .iter_forwards()
+            .map(|n| (n as *const _, n))
+            .collect::<Vec<_>>()
+    );
+
+    x.set_next(z); // |x -> z -> x ...
+
+    dbg!(z  .iter_forwards()
+            .map(|n| (n as *const _, n))
+            .take(5)
+            .collect::<Vec<_>>()
+    );
 }

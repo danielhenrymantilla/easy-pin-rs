@@ -1,6 +1,6 @@
 [package]
 name = "easy-pin"
-version = "0.0.1-alpha"
+version = "0.0.1-alpha.2"
 authors = ["Daniel Henry-Mantilla <daniel.henry.mantilla@gmail.com>"]
 edition = "2018"
 
@@ -11,11 +11,11 @@ documentation = "https://docs.rs/easy-pin"
 homepage = "https://crates.io/crates/easy-pin"
 repository = "https://github.com/danielhenrymantilla/easy-pin-rs"
 
-license-file = "LICENSE"
 license = "MIT"
 
 [dependencies]
-easy-pin-proc-macro = { version = "0.0.1-alpha",  path = "proc-macro/" }
+easy-pin-proc-macro = { version = "0.0.1-alpha.2",  path = "proc-macro/" }
 
 [dev-dependencies]
 pin-utils = "0.1.0-alpha.4"
+trybuild = "1.0.6"

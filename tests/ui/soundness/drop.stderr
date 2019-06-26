@@ -1,0 +1,10 @@
+error[E0119]: conflicting implementations of trait `std::ops::Drop` for type `SelfReferential`:
+  --> $DIR/drop.rs:9:1
+   |
+9  | #[easy_pin]
+   | ^^^^^^^^^^^ conflicting implementation for `SelfReferential`
+...
+19 | impl Drop for SelfReferential {
+   | ----------------------------- first implementation here
+
+For more information about this error, try `rustc --explain E0119`.

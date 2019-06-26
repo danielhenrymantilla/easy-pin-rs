@@ -1,0 +1,10 @@
+error[E0119]: conflicting implementations of trait `std::marker::Unpin` for type `SelfReferential`:
+  --> $DIR/unpin.rs:12:1
+   |
+12 | #[easy_pin]
+   | ^^^^^^^^^^^ conflicting implementation for `SelfReferential`
+...
+22 | impl Unpin for SelfReferential {}
+   | ------------------------------ first implementation here
+
+For more information about this error, try `rustc --explain E0119`.

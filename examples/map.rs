@@ -8,7 +8,7 @@ use ::std::{
 
 use ::easy_pin::easy_pin;
 
-#[easy_pin(Unpin)]
+#[easy_pin]
 struct Map<Fut, F> {
     #[transitively_pinned]
     future: Fut,

@@ -1,4 +1,5 @@
 #![allow(clippy::match_ref_pats)] // clearer borrowing semantics
+#![deny(elided_lifetimes_in_paths)]
 
 use ::std::{*,
     collections::HashMap as Map,
@@ -7,10 +8,13 @@ use ::std::{*,
 extern crate proc_macro; use ::proc_macro::{
     TokenStream,
 };
+#[allow(unused)]
 use ::proc_macro2::{
     Span,
 };
+#[allow(unused)]
 use ::quote::{
+    quote,
     quote_spanned,
 };
 use ::syn::{self,
@@ -25,52 +29,126 @@ use ::syn::{self,
 #[macro_use]
 mod helper_macros;
 
-macro_rules! error_spanned {($span:expr => $msg:expr) => ({
-    let msg = syn::LitStr::new($msg, $span);
-    return TokenStream::from(quote_spanned! { $span =>
-        compile_error!(#msg);
-    });
-})}
-
+enum Parameter {
+    Ident(Ident),
+    IdentEqLit {
+        ident: Ident,
+        lit: syn::Lit,
+    },
+}
+impl Parse for Parameter {
+    fn parse (input: ParseStream<'_>) -> Result<Self, syn::Error>
+    {
+        let meta = input.parse()?;
+        Ok(match meta {//
+            | syn::Meta::Word(ident) => {
+                Parameter::Ident(ident)
+            },
+            | syn::Meta::NameValue(syn::MetaNameValue {
+                ident,
+                lit,
+                ..
+            }) => {
+                Parameter::IdentEqLit { ident, lit }
+            },
+            | _ => {
+                return Err(input.error(
+                    "Expected <ident> or <ident> = <literal>"
+                ));
+            },
+        })
+    }
+}
 #[cfg_attr(feature = "extra-traits",
     derive(Debug)
 )]
 #[derive(Default)]
 struct DerivePinParams {
-    drop: Option<Span>,
-    unpin: Option<Span>,
+    drop: Option<Option<Span>>,
+
+    unsafe_no_unpin: bool,
 }
 impl Parse for DerivePinParams {
-    fn parse (params: ParseStream<'_>) -> Result<Self, syn::Error>
+    fn parse (input: ParseStream<'_>) -> Result<Self, syn::Error>
     {
-        let mut ret = Self::default();
-        let idents = Punctuated::<Ident, syn::Token![,]>::
-            parse_terminated(params)?
+        let params = Punctuated::<Parameter, syn::Token![,]>::
+            parse_terminated(input)?
         ;
-        for ident in idents {
-            if ident == "Drop" {
-                let prev_drop = ret.drop.replace(ident.span());
-                if prev_drop.is_some() {
+        let mut ret = Self::default();
+        params.into_iter().try_for_each(|param| Ok(match param {//
+            | Parameter::Ident(ident) => switch! { ident =>
+                | if "Drop" => {
+                    let prev_drop = ret.drop.replace(Some(ident.span()));
+                    if prev_drop.is_some() {
+                        return Err(syn::Error::new(
+                            ident.span(),
+                            "Error, duplicated param `Drop`",
+                        ));
+                    }
+                },
+                | if "Unpin" => {
                     return Err(syn::Error::new(
                         ident.span(),
-                        "Error, duplicated param `Drop`",
+                        r#"Missing `= "unsafe_no_impl"` for `Unpin` parameter"#
                     ));
-                }
-            } else if ident == "Unpin" {
-                let prev_unpin = ret.unpin.replace(ident.span());
-                if prev_unpin.is_some() {
+                },
+                | else => {
                     return Err(syn::Error::new(
                         ident.span(),
-                        "Error, duplicated param `Unpin`",
+                        "Invalid parameter; expected `Drop` or `Unpin`",
                     ));
-                }
-            } else {
-                return Err(syn::Error::new(
-                    ident.span(),
-                    "Invalid parameter; expected `Drop` or `Unpin`",
-                ));
-            }
-        }
+                },
+            },
+            | Parameter::IdentEqLit {
+                ident,
+                lit,
+            } => switch! { ident =>
+                | if "Unpin" => match lit {//
+                    | syn::Lit::Str(ref string)
+                        if string.value() == "unsafe_no_impl"
+                    => {
+                        let prev = mem::replace(&mut ret.unsafe_no_unpin, true);
+                        if prev {
+                            return Err(syn::Error::new(
+                                ident.span(),
+                                "Error, duplicated param `Unpin`",
+                            ));
+                        }
+                    },
+                    | _ => {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            r#"Invalid parameter; expected `"unsafe_no_impl"`"#,
+                        ));
+                    }
+                },
+                | if "Drop" => match lit {//
+                    | syn::Lit::Str(ref string)
+                        if string.value() == "unsafe_no_impl"
+                    => {
+                        let prev_drop = ret.drop.replace(None);
+                        if prev_drop.is_some() {
+                            return Err(syn::Error::new(
+                                ident.span(),
+                                "Error, duplicated param `Drop`",
+                            ));
+                        }
+                    },
+                    | _ => {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            r#"Invalid parameter; expected `"unsafe_no_impl"`"#,
+                        ));
+                    }
+                },
+                | else => {
+                    return Err(syn::Error::new(
+                        ident.span(),
+                        "Expected `Unpin`"
+                    ));
+                },
+            },
+        }))?;
         Ok(ret)
     }
 }
@@ -82,6 +160,7 @@ struct SpecialField {
     pin_transitiveness: PinTransitiveness,
     vis: Visibility,
     ty: syn::Type,
+    span: Span,
 }
 #[cfg_attr(feature = "extra-traits",
     derive(Debug)
@@ -241,6 +320,7 @@ impl SpecialField {
                     pin_transitiveness,
                     vis: visibility,
                     ty: field_ty.clone(),
+                    span: attr.span(),
                 });
                 if prev.is_some() {
                     error_spanned!(span => concat!(
@@ -321,8 +401,9 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
 
     // Handle the Drop optional input parameter on the main proc_macro_attribute
     let params: DerivePinParams = syn::parse_macro_input!(params);
-    if let Some(span) = params.drop {
-        render_spanned! { span =>
+    match params.drop {
+        // See tests/ui/drop2.rs
+        | Some(Some(span)) => render_spanned! { span =>
             impl #impl_generics Drop
                 for #struct_name #ty_generics
             #where_clause
@@ -330,6 +411,12 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
                 #[inline]
                 fn drop (self: &'_ mut Self)
                 {
+                    "Safety:";
+                    " 1. Even in the case where `self` would not have been pinned yet,";
+                    "it is sound to pin it / consider it pinned, since it is being dropped,";
+                    "so the only place where it could be moved is here and now,";
+                    "and it so happens that we no longer use `&mut Self`.";
+                    " 2. It is safe to call `drop_pinned()` since we *are* dropping it.";
                     unsafe {
                         <Self as easy_pin::PinDrop>::drop_pinned(
                             easy_pin::core::pin::Pin::new_unchecked(self)
@@ -337,11 +424,12 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
                     }
                 }
             }
-        }
-    } else {
+        },
+
         // To avoid an unsound impl of `Drop` that does not use PinDrop,
         // let's add a dummy empty Drop that should conflict with any such impl
-        render! {
+        // See tests/ui/drop.rs
+        | None => render! {
             impl #impl_generics Drop
                 for #struct_name #ty_generics
             #where_clause
@@ -350,19 +438,19 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
                 fn drop (self: &'_ mut Self)
                 {}
             }
-        }
+        },
+
+        // This is the `Drop = "unsafe_no_impl" case.`
+        | Some(None) => {},
     }
 
     // Add Unpin when pinned fields are Unpin
-    if let Some(span) = params.unpin {
+    if params.unsafe_no_unpin.not() {
         let mut where_clause =
             where_clause
                 .cloned()
-                .unwrap_or_else(|| syn::WhereClause {
-                    where_token: syn::token::Where {
-                        span/*: Span::call_site()*/,
-                    },
-                    predicates: Punctuated::new(),
+                .unwrap_or_else(|| syn::parse_quote! {
+                    where
                 })
         ;
         let unpin_trait: syn::Path = syn::parse_quote! {
@@ -383,7 +471,7 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
                 }
             }
         ));
-        render_spanned! { span =>
+        render_spanned! { Span::call_site() =>
             impl #impl_generics #unpin_trait
                 for #struct_name #ty_generics
             #where_clause
@@ -398,13 +486,34 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
             pin_transitiveness: PinTransitive,
             vis,
             ty,
+            span,
         } => {
             // & _
+            let safety_message = {
+                let message = syn::LitStr::new(&format!(
+                    " - There is no unpinned projection to `.{}`",
+                    ident,
+                ), Span::call_site());
+                quote! {
+                    "Safety";
+                    #message;
+                    "      - (not even in Drop)";
+                    " - the struct cannot possibly be #[repr(packed)]";
+                }
+            };
             let pinned_ident = Ident::new(
                 &format!("pinned_{}", ident),
                 ident.span(),
             );
-            render_spanned! { ident.span() =>
+            let mut generics = input.generics.clone();
+            let impl_generics_function = {
+                generics.params.push(syn::parse_quote! {
+                    '__easy_pin__
+                });
+                generics.split_for_impl().0
+            };
+            let impl_generics = impl_generics.clone();
+            render_spanned! { span =>
                 impl #impl_generics
                     #struct_name #ty_generics
                 #where_clause
@@ -416,8 +525,19 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
                         self: easy_pin::core::pin::Pin<&'__ Self>,
                     ) -> easy_pin::core::pin::Pin<&'__ #ty>
                     {
+                        /// Guard against a #[repr(packed)] struct
+                        #[deny(safe_packed_borrows)]
+                        #[inline] fn map #impl_generics_function (
+                            slf: &'__easy_pin__ #struct_name #ty_generics,
+                        ) -> &'__easy_pin__ #ty
+                        #where_clause
+                        {
+                            &slf.#ident
+                        }
+
+                        #safety_message
                         unsafe {
-                            self.map_unchecked(|slf| &slf.#ident)
+                            self.map_unchecked(map)
                         }
                     }
                 }
@@ -440,6 +560,7 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
                         self: easy_pin::core::pin::Pin<&'__ mut Self>,
                     ) -> easy_pin::core::pin::Pin<&'__ mut #ty>
                     {
+                        #safety_message
                         unsafe {
                             self.map_unchecked_mut(|slf| &mut slf.#ident)
                         }
@@ -453,13 +574,17 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
             pin_transitiveness: Unpinned,
             vis,
             ty,
+            span,
         } => {
             // & _
+            let ident_str = syn::LitStr::
+                new(&ident.to_string(), Span::call_site())
+            ;
             let unpinned_ident = Ident::new(
                 &format!("unpinned_{}", ident),
                 ident.span(),
             );
-            render_spanned! { ident.span() =>
+            render_spanned! { span =>
                 impl #impl_generics #struct_name #ty_generics #where_clause {
                     #[allow(dead_code)]
                     #[inline]
@@ -490,6 +615,12 @@ fn easy_pin (params: TokenStream, input: TokenStream) -> TokenStream
                         self: easy_pin::core::pin::Pin<&'__ mut Self>,
                     ) -> &'__ mut #ty
                     {
+                        "Safety";
+                        concat!(
+                            " - There is no pinned projection to `.",
+                            #ident_str,
+                            "`",
+                        );
                         unsafe {
                             &mut self.get_unchecked_mut().#ident
                         }

@@ -1,0 +1,5 @@
+error: #[unpinned] / #[transitively_pinned] must be specified exactly once per field
+  --> $DIR/both_projections.rs:13:7
+   |
+13 |     #[unpinned]
+   |       ^^^^^^^^

@@ -1,3 +1,40 @@
+macro_rules! error_spanned {($span:expr => $msg:expr) => (
+    return TokenStream::from(
+        ::syn::Error::new($span, $msg)
+            .to_compile_error()
+    );
+)}
+
+macro_rules! switch {
+    ($ident:ident =>
+        $(
+            | if $case:expr => $value:expr,
+        )*
+        | else => $default_value:expr $(,)?
+    ) => (
+        switch! { $ident @ $ident =>
+            $(//
+                | if $case => $value,
+            )*
+            | else => $default_value,
+        }
+    );
+
+    ($ident:ident @ $expr:expr =>
+        $(
+            | if $case:expr => $value:expr,
+        )*
+        | else => $default_value:expr $(,)?
+    ) => (
+        match $expr {
+            $(//
+                | ref $ident if *$ident == $case => $value,
+            )*
+            | $ident => $default_value,
+        }
+    );
+}
+
 #[cfg(any())]
 macro_rules! mk_debug {() => (mk_debug!($)); ($dol:tt) => (
     #[derive(Default)]

@@ -1,0 +1,15 @@
+error: borrow of packed field is unsafe and requires unsafe function or block (error E0133)
+  --> $DIR/packed.rs:15:5
+   |
+15 | /     #[transitively_pinned]
+16 | |     string: PinSensitive<String>,
+   | |__________^
+   |
+note: lint level defined here
+  --> $DIR/packed.rs:15:5
+   |
+15 |     #[transitively_pinned]
+   |     ^
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #46043 <https://github.com/rust-lang/rust/issues/46043>
+   = note: fields of packed structs might be misaligned: dereferencing a misaligned pointer or even just creating a misaligned reference is undefined behavior

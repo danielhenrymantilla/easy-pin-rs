@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `std::marker::PhantomPinned: std::marker::Unpin` is not satisfied in `easy_pin::PinSensitive<std::string::String>`
+  --> $DIR/drop_unpin.rs:29:38
+   |
+29 |             self.pinned_string_mut().get_mut()
+   |                                      ^^^^^^^ within `easy_pin::PinSensitive<std::string::String>`, the trait `std::marker::Unpin` is not implemented for `std::marker::PhantomPinned`
+   |
+   = help: the following implementations were found:
+             <std::marker::PhantomPinned as std::marker::Unpin>
+   = note: required because it appears within the type `easy_pin::PinSensitive<std::string::String>`
+
+error[E0277]: the trait bound `std::marker::PhantomPinned: std::marker::Unpin` is not satisfied in `easy_pin::PinSensitive<std::string::String>`
+  --> $DIR/drop_unpin.rs:31:23
+   |
+31 |             &mut self.get_mut().string
+   |                       ^^^^^^^ within `easy_pin::PinSensitive<std::string::String>`, the trait `std::marker::Unpin` is not implemented for `std::marker::PhantomPinned`
+   |
+   = help: the following implementations were found:
+             <std::marker::PhantomPinned as std::marker::Unpin>
+   = note: required because it appears within the type `easy_pin::PinSensitive<std::string::String>`
+   = note: required because of the requirements on the impl of `std::marker::Unpin` for `SelfReferential`
+
+For more information about this error, try `rustc --explain E0277`.
